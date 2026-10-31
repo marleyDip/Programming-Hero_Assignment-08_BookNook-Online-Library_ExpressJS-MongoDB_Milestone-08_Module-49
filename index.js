@@ -8,8 +8,6 @@ import { MongoClient } from "mongodb";
 
 const PORT = process.env.PORT || 8000;
 
-// Database Connection
-
 // Verify environment variables
 // console.log("MongoDB URI exists:", !!process.env.MONGODB_URI);
 // console.log("Database name:", process.env.MONGODB_URI);
@@ -17,6 +15,7 @@ const PORT = process.env.PORT || 8000;
 // Its class, create new instance or object
 const client = new MongoClient(process.env.MONGODB_URI);
 
+// Database Connection - MongoDB
 export async function connectToMongoDB() {
   try {
     await client.connect();
@@ -29,7 +28,9 @@ export async function connectToMongoDB() {
 
 connectToMongoDB();
 
+// Express App
 const app = express();
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -40,10 +41,13 @@ app.get("/api/health", (_req, res) => {
 });
 
 // Home Endpoints
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.send({ message: "Server is running fine!" });
 });
 
 app.listen(PORT, () => {
   console.log(`Server is running at ${PORT}`);
 });
+
+// IMPORTANT: Export Express app for Vercel
+export default app;
