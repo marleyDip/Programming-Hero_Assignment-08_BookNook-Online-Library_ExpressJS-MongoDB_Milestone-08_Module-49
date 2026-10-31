@@ -1,0 +1,35 @@
+{
+  "name": "booknook-server",
+  "version": "1.0.0",
+  "description": "REST API for BookNook, a small online library",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "booknook",
+    "online library",
+    "library management",
+    "book management",
+    "book borrowing",
+    "book return",
+    "book collection",
+    "book catalog",
+    "express",
+    "node.js",
+    "mongodb",
+    "rest api",
+    "jwt authentication",
+    "backend"
+  ],
+  "author": "Md Sofian Hasan",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "jose": "^6.2.14",
+    "mongodb": "^7.8.0"
+  }
+}
