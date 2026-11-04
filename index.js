@@ -1204,6 +1204,179 @@ app.post("/api/borrows", async (req, res) => {
   }
 });
 
+// MY BORROWS  ->  GET /api/borrows?email=a@b.com
+app.get("/api/borrows", async (req, res) => {
+  try {
+    // 1. Validate email
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid email address is required.",
+      });
+    }
+
+    // 2. Fetch user's borrowing records
+    const borrows = await borrowsCollection
+      .find({ userEmail: email })
+      .sort({ borrowDate: -1, _id: -1 })
+      .toArray();
+
+    // 3. Send response
+    return res.status(200).json({
+      success: true,
+      message: borrows.length
+        ? "Your borrowing records fetched successfully."
+        : "No borrowing records found.",
+      data: borrows,
+      total: borrows.length,
+    });
+  } catch (error) {
+    console.error("Get borrows error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch your borrowing records.",
+    });
+  }
+});
+
+// RETURN A BOOK  ->  PATCH /api/borrows/:id/return   { userEmail }
+app.patch("/api/borrows/:id/return", async (req, res) => {
+  const session = client.startSession();
+
+  try {
+    // 1. Validate borrowing ID
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid borrowing ID.",
+      });
+    }
+
+    // 2. Validate user email
+    const email =
+      typeof req.body?.userEmail === "string"
+        ? req.body.userEmail.trim().toLowerCase()
+        : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid user email is required.",
+      });
+    }
+
+    const _id = new ObjectId(id);
+
+    let outcome;
+
+    // 3. Execute return transaction
+    await session.withTransaction(async () => {
+      outcome = undefined;
+
+      // Find active borrowing belonging to this user
+      const borrow = await borrowsCollection.findOne(
+        {
+          _id,
+          userEmail: email,
+          status: "borrowed",
+        },
+        { session },
+      );
+
+      if (!borrow) {
+        outcome = {
+          status: 404,
+          message: "Active borrowing not found.",
+        };
+        return;
+      }
+
+      // Increment available copies safely
+      const bookResult = await booksCollection.updateOne(
+        {
+          _id: borrow.bookId,
+          $expr: {
+            $lt: ["$availableCopies", "$totalCopies"],
+          },
+        },
+        {
+          $inc: { availableCopies: 1 },
+        },
+        { session },
+      );
+
+      // Abort transaction if book is missing or stock is inconsistent
+      if (bookResult.modifiedCount !== 1) {
+        throw new Error(
+          "Book not found or available copies are already at maximum.",
+        );
+      }
+
+      // Mark borrowing as returned
+      const now = new Date();
+
+      const borrowResult = await borrowsCollection.updateOne(
+        {
+          _id,
+          userEmail: email,
+          status: "borrowed",
+        },
+        {
+          $set: {
+            status: "returned",
+            returnedAt: now,
+          },
+        },
+        { session },
+      );
+
+      // Abort if borrowing status changed unexpectedly
+      if (borrowResult.modifiedCount !== 1) {
+        throw new Error("Borrowing status changed unexpectedly.");
+      }
+
+      outcome = {
+        status: 200,
+        message: "Book returned successfully. Thank you!",
+        data: {
+          _id: id,
+          bookId: borrow.bookId,
+          status: "returned",
+          returnedAt: now,
+        },
+      };
+    });
+
+    // 4. Send response
+    return res.status(outcome.status).json({
+      success: outcome.status === 200,
+      message: outcome.message,
+      ...(outcome.data ? { data: outcome.data } : {}),
+    });
+  } catch (error) {
+    console.error("Return book error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to return the book.",
+    });
+  } finally {
+    await session.endSession();
+  }
+});
+
 // ===== Newsletter =====
 // POST /api/newsletter   { "email": "a@b.com" }
 app.post("/api/newsletter", async (req, res) => {
@@ -1253,49 +1426,6 @@ app.post("/api/newsletter", async (req, res) => {
     return res.status(500).send({
       success: false,
       message: "Failed to subscribe.",
-    });
-  }
-});
-
-// MY BORROWS  ->  GET /api/borrows?email=a@b.com
-app.get("/api/borrows", async (req, res) => {
-  try {
-    // 1. Validate email
-    const email =
-      typeof req.query.email === "string"
-        ? req.query.email.trim().toLowerCase()
-        : "";
-
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid email address is required.",
-      });
-    }
-
-    // 2. Fetch user's borrowing records
-    const borrows = await borrowsCollection
-      .find({ userEmail: email })
-      .sort({ borrowDate: -1, _id: -1 })
-      .toArray();
-
-    // 3. Send response
-    return res.status(200).json({
-      success: true,
-      message: borrows.length
-        ? "Your borrowing records fetched successfully."
-        : "No borrowing records found.",
-      data: borrows,
-      total: borrows.length,
-    });
-  } catch (error) {
-    console.error("Get borrows error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch your borrowing records.",
     });
   }
 });
