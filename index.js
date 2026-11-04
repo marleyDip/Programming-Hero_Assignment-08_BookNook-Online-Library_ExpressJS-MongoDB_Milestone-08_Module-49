@@ -105,6 +105,13 @@ try {
     },
   ]);
 
+  await booksCollection.createIndexes([
+    {
+      key: { ownerEmail: 1, createdAt: -1, _id: -1 },
+      name: "books_owner_createdAt",
+    },
+  ]);
+
   // 2. Find duplicate subscriber emails
   const duplicates = await subscribersCollection
     .aggregate([
@@ -659,6 +666,237 @@ app.get("/api/my-books", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch your books.",
+    });
+  }
+});
+
+// UPDATE BOOK (owner only)  ->  PUT /api/books/:id?email=a@b.com
+app.put("/api/books/:id", async (req, res) => {
+  try {
+    // 1. Validate book ID
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID.",
+      });
+    }
+
+    // 2. Validate owner email
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid owner email is required.",
+      });
+    }
+
+    // 3. Extract request body
+    const {
+      title,
+      author,
+      category,
+      image,
+      description,
+      totalCopies,
+      isbn,
+      publishedYear,
+      language,
+      condition,
+    } = req.body ?? {};
+
+    // 4. Validate required fields
+    if (
+      typeof title !== "string" ||
+      !title.trim() ||
+      typeof author !== "string" ||
+      !author.trim() ||
+      typeof category !== "string" ||
+      !category.trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Title, author and category are required.",
+      });
+    }
+
+    // 5. Normalize input
+    const normalizedTitle = title.trim();
+    const normalizedAuthor = author.trim();
+    const normalizedCategory = category.trim();
+
+    // 6. Validate category
+    if (!CATEGORIES.includes(normalizedCategory)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book category.",
+      });
+    }
+
+    // 7. Validate total copies
+    const copies = Number(totalCopies);
+
+    if (!Number.isInteger(copies) || copies < 1 || copies > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Total copies must be between 1 and 100.",
+      });
+    }
+
+    // 8. Validate optional string fields
+    const optionalString = (value, maxLength, fallback = "") => {
+      if (value === undefined || value === null) return fallback;
+      if (typeof value !== "string") return null;
+
+      const normalized = value.trim();
+
+      return normalized.length <= maxLength ? normalized : null;
+    };
+
+    const normalizedImage = optionalString(image, 2048);
+    const normalizedDescription = optionalString(description, 500);
+    const normalizedIsbn = optionalString(isbn, 20);
+    const normalizedLanguage = optionalString(language, 50, "English");
+
+    if (
+      normalizedImage === null ||
+      normalizedDescription === null ||
+      normalizedIsbn === null ||
+      normalizedLanguage === null
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more optional fields are invalid or too long.",
+      });
+    }
+
+    // 9. Validate publication year
+    let year = null;
+
+    if (
+      publishedYear !== undefined &&
+      publishedYear !== null &&
+      publishedYear !== ""
+    ) {
+      year = Number(publishedYear);
+
+      const currentYear = new Date().getFullYear();
+
+      if (!Number.isInteger(year) || year < 1000 || year > currentYear + 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid publication year.",
+        });
+      }
+    }
+
+    // 10. Validate condition
+    if (condition !== undefined && !CONDITIONS.includes(condition)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book condition.",
+      });
+    }
+
+    const normalizedCondition = condition ?? "Good";
+
+    // 11. Find existing book
+    const _id = new ObjectId(id);
+
+    const book = await booksCollection.findOne({
+      _id,
+      ownerEmail: email,
+    });
+
+    if (!book) {
+      const exists = await booksCollection.findOne(
+        { _id },
+        { projection: { _id: 1 } },
+      );
+
+      return res.status(exists ? 403 : 404).json({
+        success: false,
+        message: exists
+          ? "You can only edit your own books."
+          : "Book not found.",
+      });
+    }
+
+    // 12. Calculate borrowed copies
+    const total = book.totalCopies ?? 1;
+    const available = book.availableCopies ?? total;
+    const borrowedNow = Math.max(0, total - available);
+
+    if (copies < borrowedNow) {
+      return res.status(400).json({
+        success: false,
+        message: `${borrowedNow} copies are borrowed right now, so total copies cannot be less than ${borrowedNow}.`,
+      });
+    }
+
+    // 13. Prepare update
+    const changes = {
+      title: normalizedTitle,
+      author: normalizedAuthor,
+      category: normalizedCategory,
+      image: normalizedImage,
+      description: normalizedDescription,
+      totalCopies: copies,
+      availableCopies: copies - borrowedNow,
+      isbn: normalizedIsbn,
+      publishedYear: year,
+      language: normalizedLanguage,
+      condition: normalizedCondition,
+      updatedAt: new Date(),
+    };
+
+    // 14. Atomic ownership and availability check
+    const result = await booksCollection.updateOne(
+      {
+        _id,
+        ownerEmail: email,
+        totalCopies: total,
+        availableCopies: available,
+        $expr: {
+          $lte: [{ $subtract: ["$totalCopies", "$availableCopies"] }, copies],
+        },
+      },
+      {
+        $set: changes,
+      },
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Book data changed during the update. Please refresh and try again.",
+      });
+    }
+
+    // 15. Return updated book
+    return res.status(200).json({
+      success: true,
+      message: "Book updated successfully.",
+      data: {
+        _id,
+        ...book,
+        ...changes,
+      },
+    });
+  } catch (error) {
+    console.error("Update book error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update book.",
     });
   }
 });
