@@ -112,6 +112,11 @@ try {
     },
   ]);
 
+  await borrowsCollection.createIndex(
+    { bookId: 1, status: 1 },
+    { name: "borrowings_bookId_status" },
+  );
+
   // 2. Find duplicate subscriber emails
   const duplicates = await subscribersCollection
     .aggregate([
@@ -897,6 +902,107 @@ app.put("/api/books/:id", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update book.",
+    });
+  }
+});
+
+// DELETE BOOK (owner only)  ->  DELETE /api/books/:id?email=a@b.com
+app.delete("/api/books/:id", async (req, res) => {
+  try {
+    // 1. Validate MongoDB ObjectId
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID.",
+      });
+    }
+
+    // 2. Validate owner email
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid owner email is required.",
+      });
+    }
+
+    const _id = new ObjectId(id);
+
+    // 3. Find the book and verify ownership
+    const book = await booksCollection.findOne({
+      _id,
+      ownerEmail: email,
+    });
+
+    if (!book) {
+      // Check whether the book exists but belongs to someone else
+      const exists = await booksCollection.findOne(
+        { _id },
+        { projection: { _id: 1 } },
+      );
+
+      return res.status(exists ? 403 : 404).json({
+        success: false,
+        message: exists
+          ? "You can only delete your own books."
+          : "Book not found.",
+      });
+    }
+
+    // 4. Check active borrowings
+    const activeBorrows = await borrowsCollection.findOne(
+      {
+        bookId: _id,
+        status: "borrowed",
+      },
+      {
+        projection: { _id: 1 },
+      },
+    );
+
+    if (activeBorrows) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Some copies are currently borrowed. Return them before deleting this book.",
+      });
+    }
+
+    // 5. Delete the book with ownership protection
+    const result = await booksCollection.deleteOne({
+      _id,
+      ownerEmail: email,
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(409).json({
+        success: false,
+        message: "The book could not be deleted. Please try again.",
+      });
+    }
+
+    // 6. Success response
+    return res.status(200).json({
+      success: true,
+      message: "Book deleted successfully.",
+      data: {
+        _id: id,
+      },
+    });
+  } catch (error) {
+    console.error("Delete book error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete book.",
     });
   }
 });
