@@ -117,6 +117,41 @@ try {
     { name: "borrowings_bookId_status" },
   );
 
+  await borrowsCollection.createIndex(
+    {
+      bookId: 1,
+      userEmail: 1,
+    },
+    {
+      name: "unique_active_borrowing",
+      unique: true,
+      partialFilterExpression: {
+        status: "borrowed",
+      },
+    },
+  );
+
+  await borrowsCollection.createIndex(
+    {
+      bookId: 1,
+      status: 1,
+    },
+    {
+      name: "borrowings_bookId_status",
+    },
+  );
+
+  await borrowsCollection.createIndex(
+    {
+      userEmail: 1,
+      borrowDate: -1,
+      _id: -1,
+    },
+    {
+      name: "borrowings_user_borrowDate",
+    },
+  );
+
   // 2. Find duplicate subscriber emails
   const duplicates = await subscribersCollection
     .aggregate([
@@ -1007,6 +1042,168 @@ app.delete("/api/books/:id", async (req, res) => {
   }
 });
 
+// ===== Borrowing =====
+// BORROW A BOOK  ->  POST /api/borrows   { bookId, userEmail, userName }
+app.post("/api/borrows", async (req, res) => {
+  const session = client.startSession();
+
+  try {
+    // 1. Validate request body
+    const { bookId, userEmail, userName } = req.body ?? {};
+
+    if (
+      typeof bookId !== "string" ||
+      !ObjectId.isValid(bookId) ||
+      typeof userEmail !== "string"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid bookId and userEmail are required.",
+      });
+    }
+
+    // 2. Normalize and validate email
+    const email = userEmail.trim().toLowerCase();
+    const name = typeof userName === "string" ? userName.trim() : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid email address.",
+      });
+    }
+
+    if (name.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "User name must not exceed 100 characters.",
+      });
+    }
+
+    const _id = new ObjectId(bookId);
+
+    let outcome;
+
+    // 3. Execute borrowing transaction
+    await session.withTransaction(async () => {
+      // Find book
+      const book = await booksCollection.findOne({ _id }, { session });
+
+      if (!book) {
+        outcome = {
+          status: 404,
+          message: "Book not found.",
+        };
+        return;
+      }
+
+      // Prevent borrowing own book
+      if (book.ownerEmail === email) {
+        outcome = {
+          status: 400,
+          message: "You can't borrow your own book.",
+        };
+        return;
+      }
+
+      // Check existing active borrowing
+      const alreadyBorrowed = await borrowsCollection.findOne(
+        {
+          bookId: _id,
+          userEmail: email,
+          status: "borrowed",
+        },
+        {
+          projection: { _id: 1 },
+          session,
+        },
+      );
+
+      if (alreadyBorrowed) {
+        outcome = {
+          status: 409,
+          message: "You have already borrowed this book.",
+        };
+        return;
+      }
+
+      // Atomically decrease available copies
+      const updateResult = await booksCollection.updateOne(
+        {
+          _id,
+          availableCopies: { $gt: 0 },
+        },
+        {
+          $inc: { availableCopies: -1 },
+        },
+        { session },
+      );
+
+      if (updateResult.modifiedCount !== 1) {
+        outcome = {
+          status: 409,
+          message: "No copies are available right now.",
+        };
+        return;
+      }
+
+      // Create borrowing record
+      const now = new Date();
+
+      const borrowing = {
+        bookId: _id,
+        bookTitle: book.title,
+        bookAuthor: book.author,
+        bookImage: book.image,
+        userEmail: email,
+        userName: name,
+        borrowDate: now,
+        returnDate: new Date(now.getTime() + BORROW_DAYS * DAY_MS),
+        returnedAt: null,
+        status: "borrowed",
+      };
+
+      const result = await borrowsCollection.insertOne(borrowing, { session });
+
+      outcome = {
+        status: 201,
+        message: `Borrowed successfully! Please return it within ${BORROW_DAYS} days.`,
+        data: {
+          _id: result.insertedId,
+          bookId,
+          returnDate: borrowing.returnDate,
+          status: borrowing.status,
+        },
+      };
+    });
+
+    // 4. Send response
+    return res.status(outcome.status).json({
+      success: outcome.status === 201,
+      message: outcome.message,
+      ...(outcome.data ? { data: outcome.data } : {}),
+    });
+  } catch (error) {
+    console.error("Borrow book error:", error);
+
+    if (error?.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "You have already borrowed this book.",
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to borrow the book.",
+    });
+  } finally {
+    await session.endSession();
+  }
+});
+
 // ===== Newsletter =====
 // POST /api/newsletter   { "email": "a@b.com" }
 app.post("/api/newsletter", async (req, res) => {
@@ -1056,6 +1253,49 @@ app.post("/api/newsletter", async (req, res) => {
     return res.status(500).send({
       success: false,
       message: "Failed to subscribe.",
+    });
+  }
+});
+
+// MY BORROWS  ->  GET /api/borrows?email=a@b.com
+app.get("/api/borrows", async (req, res) => {
+  try {
+    // 1. Validate email
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : "";
+
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid email address is required.",
+      });
+    }
+
+    // 2. Fetch user's borrowing records
+    const borrows = await borrowsCollection
+      .find({ userEmail: email })
+      .sort({ borrowDate: -1, _id: -1 })
+      .toArray();
+
+    // 3. Send response
+    return res.status(200).json({
+      success: true,
+      message: borrows.length
+        ? "Your borrowing records fetched successfully."
+        : "No borrowing records found.",
+      data: borrows,
+      total: borrows.length,
+    });
+  } catch (error) {
+    console.error("Get borrows error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch your borrowing records.",
     });
   }
 });
