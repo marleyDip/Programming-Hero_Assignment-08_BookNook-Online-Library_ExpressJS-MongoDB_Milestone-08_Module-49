@@ -1,78 +1,36 @@
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { MongoClient, ObjectId } from "mongodb";
 
-// import dotenv from "dotenv";
-// dotenv.config();
-
 const PORT = process.env.PORT || 8000;
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = process.env.DB_NAME || "booknook";
 
-// Verify environment variables
-// console.log("MongoDB URI exists:", !!process.env.MONGODB_URI);
-// console.log("Database name:", process.env.MONGODB_URI);
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI is not configured.");
+}
 
-// Its class, create new instance or object
-const client = new MongoClient(process.env.MONGODB_URI);
+const client = new MongoClient(MONGODB_URI);
 
-// Database Connection - MongoDB
 export async function connectToMongoDB() {
   try {
     await client.connect();
     console.log("You successfully connected to MongoDB!");
-    return client;
-  } catch (err) {
-    console.dir(err);
+    // return client;
+  } catch (error) {
+    // console.dir(err);
+    console.error("MongoDB connection failed:", error);
+    process.exit(1);
   }
 }
 
-// connectToMongoDB();
-const mongoClient = await connectToMongoDB();
-const db = mongoClient.db("booknook");
+const db = client.db(DB_NAME);
+
 const booksCollection = db.collection("books");
 const borrowsCollection = db.collection("borrowings");
 const subscribersCollection = db.collection("subscribers");
-
-// Indexes: fast "newest first" & no duplicate newsletter emails
-// createIndex() - Creates one index. It is deprecated in the current driver typings, but still works. Use createIndexes() instead.
-/* try {
-  await booksCollection.createIndex({ createdAt: -1 });
-  await subscribersCollection.createIndex({ email: 1 }, { unique: true });
-
-  await subscribersCollection.createIndex(
-    { email: 1 },
-    {
-      unique: true,
-      name: "unique_subscriber_email",
-    },
-  );
-} catch (err) {
-  console.dir(err);
-} */
-
-// createIndexes() - Creates multiple indexes in one call.
-// Create indexes
-/* try {
-  // await booksCollection.createIndexes([
-  //   { key: { createdAt: -1 }, name: "createdAt_desc" },
-  //   { key: { createdAt: 1 }, name: "createdAt_asc" },
-  //   { key: { title: 1 }, name: "title_asc" },
-  //   { key: { title: -1 }, name: "title_desc" },
-  //   { key: { author: 1 }, name: "author_asc" },
-  //   { key: { author: -1 }, name: "author_desc" },
-  //   { key: { category: 1 }, name: "category_asc" },
-  //   { key: { category: -1 }, name: "category_desc" },
-  // ]);
-
-  // await booksCollection.createIndexes([
-  //   { key: { createdAt: -1 }, name: "createdAt_desc" },
-  //   // { key: { createdAt: -1 } },
-  // ]);
-
-  console.log("MongoDB indexes created successfully!");
-} catch (err) {
-  console.error("Failed to create MongoDB indexes:", err);
-} */
 
 /* Why use createIndexes()?
     - Supports creating multiple indexes together.
@@ -80,8 +38,8 @@ const subscribersCollection = db.collection("subscribers");
     - Avoids the deprecated method warning in your current driver typings.
 */
 
+// Create indexes
 // MongoDB indexes for performance
-
 try {
   // 1. Create books indexes
   await booksCollection.createIndexes([
@@ -112,86 +70,33 @@ try {
     },
   ]);
 
-  await borrowsCollection.createIndex(
-    { bookId: 1, status: 1 },
-    { name: "borrowings_bookId_status" },
-  );
-
-  await borrowsCollection.createIndex(
+  // 2. Create borrows indexes
+  await borrowsCollection.createIndexes([
     {
-      bookId: 1,
-      userEmail: 1,
+      key: { bookId: 1, status: 1 },
+      name: "borrowings_bookId_status",
     },
+
     {
+      key: { bookId: 1, userEmail: 1 },
       name: "unique_active_borrowing",
       unique: true,
       partialFilterExpression: {
         status: "borrowed",
       },
     },
-  );
 
-  await borrowsCollection.createIndex(
     {
-      bookId: 1,
-      status: 1,
-    },
-    {
-      name: "borrowings_bookId_status",
-    },
-  );
-
-  await borrowsCollection.createIndex(
-    {
-      userEmail: 1,
-      borrowDate: -1,
-      _id: -1,
-    },
-    {
+      key: {
+        userEmail: 1,
+        borrowDate: -1,
+        _id: -1,
+      },
       name: "borrowings_user_borrowDate",
     },
-  );
+  ]);
 
-  // 2. Find duplicate subscriber emails
-  const duplicates = await subscribersCollection
-    .aggregate([
-      {
-        $sort: {
-          createdAt: 1,
-          _id: 1,
-        },
-      },
-      {
-        $group: {
-          _id: "$email",
-          ids: { $push: "$_id" },
-        },
-      },
-      {
-        $project: {
-          duplicateIds: {
-            $slice: ["$ids", 1, { $size: "$ids" }],
-          },
-        },
-      },
-    ])
-    .toArray();
-
-  // Extract duplicate ObjectIds
-  const idsToDelete = duplicates.flatMap((item) => item.duplicateIds);
-
-  // Delete duplicate subscribers
-  if (idsToDelete.length > 0) {
-    const result = await subscribersCollection.deleteMany({
-      _id: { $in: idsToDelete },
-    });
-
-    console.log("Deleted duplicate subscribers:", result.deletedCount);
-  } else {
-    console.log("No duplicate subscribers found.");
-  }
-
-  // 4. Create unique email index
+  // 3. Create unique email index
   await subscribersCollection.createIndexes([
     {
       key: { email: 1 },
@@ -223,7 +128,30 @@ console.table(
 const app = express();
 
 // Middleware
-app.use(cors());
+// CORS configuration
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  process.env.DASHBOARD_URL,
+  "http://localhost:3000",
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow server-to-server requests and tools without an Origin header.
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Origin not allowed by CORS."));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+
+// Limits payload size protects server from Denial of Service (DoS) attacks by rejecting JSON payloads larger than 1 megabyte.
+app.use(express.json({ limit: "1mb" }));
 app.use(express.json());
 
 // Helpers
@@ -255,27 +183,85 @@ const BORROW_DAYS = 5;
 const DAY_MS = 24 * 60 * 60 * 1000; // milliseconds in a standard 24-hour day (86,400,000 milliseconds) - Hour, Minute, Second
 
 function parsePositiveInt(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (typeof value !== "string" && typeof value !== "number") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
 
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-// Write/private routes are called by the Next.js server only (Server Actions),
-// which sends this shared secret. Set INTERNAL_API_KEY in both .env files.
-// Old Method - Now used betterAuth. No need to manual protection.
-/* const requireApiKey = (req, res, next) => {
-  const key = process.env.INTERNAL_API_KEY;
-  if (!key || req.get("x-api-key") !== key) {
-    return res.status(401).send({ message: "Unauthorized" });
+// Better Auth JWKS
+const BETTER_AUTH_URL = process.env.CLIENT_URL;
+
+if (!BETTER_AUTH_URL) {
+  throw new Error("BETTER_AUTH_URL is not configured.");
+}
+
+const JWKS = createRemoteJWKSet(new URL("/api/auth/jwks", BETTER_AUTH_URL));
+
+/* const JWKS = createRemoteJWKSet(
+  new URL("/api/auth/jwks", process.env.BETTER_AUTH_URL),
+
+  // new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`),
+); */
+
+// JWT Verification Middleware
+const verifyApi = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized!",
+    });
   }
-  next();
-}; */
+
+  // const token = authHeaders.split(" ")[1];
+  const token = authHeader.slice(7).trim();
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: "Token is required!",
+    });
+  }
+
+  try {
+    // verifies the JWT and extracts its payload.
+    const { payload } = await jwtVerify(token, JWKS);
+    // console.log(payload);
+
+    // makes the verified identity available to subsequent handlers.
+    // req.user = payload;
+
+    if (typeof payload.email !== "string" || !payload.email.trim()) {
+      return res.status(401).json({
+        success: false,
+        message: "Token does not contain a valid user identity.",
+      });
+    }
+
+    req.user = {
+      email: payload.email.trim().toLowerCase(),
+      name: typeof payload.name === "string" ? payload.name.trim() : "",
+      id: payload.sub,
+    };
+
+    // passes control to the next middleware or route handler.
+    next();
+  } catch (error) {
+    console.error("JWT verification failed:", error.message);
+
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or expired token.",
+    });
+  }
+};
 
 // ==== Books =====
-/* app.get("/api/books", async (req, res) => {
-  const book = await booksCollection.find().toArray();
-  res.send(book);
-}); */
 
 // ALL BOOKS (filter, search, sort & pagination)
 // GET /api/books?category=Fiction&search=dune&sort=title-asc&page=2&limit=10
@@ -324,7 +310,13 @@ app.get("/api/books", async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    // Fetch books and total count concurrently
+    if (!Number.isSafeInteger(skip)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters.",
+      });
+    }
+
     // Fetch books and total count concurrently
     const [books, total] = await Promise.all([
       booksCollection
@@ -363,57 +355,6 @@ app.get("/api/books", async (req, res) => {
   }
 });
 
-/* 
-app.get("/api/books", async (req, res) => {
-  try {
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(
-      Math.max(parseInt(req.query.limit, 10) || 10, 1),
-      50,
-    );
-
-    const { category, search, sort } = req.query;
-
-    const query = {};
-
-    if (category) {
-      query.category = {
-        $regex: `^${escapeRegex(String(category))}$`,
-        $options: "i",
-      };
-    }
-
-    if (search) {
-      const rx = { $regex: escapeRegex(String(search)), $options: "i" };
-      query.$or = [{ title: rx }, { author: rx }];
-    }
-
-    const sortBy = SORTS[sort] || SORTS.newest;
-
-    const [books, total] = await Promise.all([
-      booksCollection
-        .find(query)
-        .collation({ locale: "en" }) // proper A-Z ordering, ignores case
-        .sort(sortBy)
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .toArray(),
-
-      booksCollection.countDocuments(query),
-    ]);
-
-    res.send({
-      books,
-      total,
-      page,
-      totalPages: Math.max(Math.ceil(total / limit), 1),
-    });
-  } catch (error) {
-    res.status(500).send({ message: "Failed to fetch books" });
-  }
-});
-*/
-
 // LATEST 8 BOOKS (newest first)
 // IMPORTANT: keep this above "/api/books/:id"
 app.get("/api/books/latest", async (_req, res) => {
@@ -448,8 +389,14 @@ app.get("/api/books/latest", async (_req, res) => {
  * GET /api/books/:id
  * Get a single book by MongoDB ObjectId
  * Used by: Book Details page
+ * Used Middleware to secure api
+ *
+ * Request => Middleware (check authenticated or not) => Response, back to client
+ *
+ * Here, "verifyApi" is Middleware
+ *
  */
-app.get("/api/books/:id", async (req, res) => {
+app.get("/api/books/:id", verifyApi, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -493,7 +440,7 @@ app.get("/api/books/:id", async (req, res) => {
 });
 
 // ADD BOOK (createdAt is what makes "newest" work)
-app.post("/api/books", async (req, res) => {
+app.post("/api/books", verifyApi, async (req, res) => {
   try {
     const {
       title,
@@ -506,8 +453,6 @@ app.post("/api/books", async (req, res) => {
       publishedYear,
       language,
       condition,
-      ownerName,
-      ownerEmail,
     } = req.body ?? {};
 
     // 1. Validate required fields
@@ -515,7 +460,6 @@ app.post("/api/books", async (req, res) => {
       title,
       author,
       category,
-      ownerEmail,
     };
 
     const missingFields = Object.entries(requiredFields)
@@ -530,13 +474,32 @@ app.post("/api/books", async (req, res) => {
       });
     }
 
-    // 2. Normalize input
+    // 2. Get authenticated user identity
+    const ownerEmail = req.user.email;
+    const ownerName = req.user.name || "";
+
+    if (!ownerEmail) {
+      return res.status(401).json({
+        success: false,
+        message: "Authenticated user email is unavailable.",
+      });
+    }
+
+    // 3. Normalize input
     const normalizedTitle = title.trim();
     const normalizedAuthor = author.trim();
     const normalizedCategory = category.trim();
     const normalizedEmail = ownerEmail.trim().toLowerCase();
 
-    // 3. Validate category
+    // 4. Validate field lengths
+    if (normalizedTitle.length > 200 || normalizedAuthor.length > 150) {
+      return res.status(400).json({
+        success: false,
+        message: "Title or author exceeds the allowed length.",
+      });
+    }
+
+    // 5. Validate category
     if (!CATEGORIES.includes(normalizedCategory)) {
       return res.status(400).json({
         success: false,
@@ -544,17 +507,24 @@ app.post("/api/books", async (req, res) => {
       });
     }
 
-    // 4. Validate total copies
+    // 6. Validate total copies
     const copies = Number(totalCopies);
 
-    if (!Number.isInteger(copies) || copies < 1 || copies > 100) {
+    if (
+      totalCopies === undefined ||
+      totalCopies === null ||
+      totalCopies === "" ||
+      !Number.isInteger(copies) ||
+      copies < 1 ||
+      copies > 100
+    ) {
       return res.status(400).json({
         success: false,
         message: "Total copies must be between 1 and 100.",
       });
     }
 
-    // 5. Validate publication year
+    // 7. Validate publication year
     let year = null;
 
     if (
@@ -574,17 +544,7 @@ app.post("/api/books", async (req, res) => {
       }
     }
 
-    // 6. Validate email
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(normalizedEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a valid owner email.",
-      });
-    }
-
-    // 7. Validate optional string lengths
+    // 8. Validate optional string lengths
     const optionalString = (value, maxLength, fallback = "") => {
       if (value === undefined || value === null) return fallback;
 
@@ -599,14 +559,12 @@ app.post("/api/books", async (req, res) => {
     const normalizedDescription = optionalString(description, 500);
     const normalizedIsbn = optionalString(isbn, 20);
     const normalizedLanguage = optionalString(language, 50, "English");
-    const normalizedOwnerName = optionalString(ownerName, 100);
 
     if (
       normalizedImage === null ||
       normalizedDescription === null ||
       normalizedIsbn === null ||
-      normalizedLanguage === null ||
-      normalizedOwnerName === null
+      normalizedLanguage === null
     ) {
       return res.status(400).json({
         success: false,
@@ -615,12 +573,30 @@ app.post("/api/books", async (req, res) => {
       });
     }
 
-    // 8. Validate book condition
-    const normalizedCondition = CONDITIONS.includes(condition)
-      ? condition
-      : "Good";
+    // 9. Validate image
+    if (!normalizedImage) {
+      return res.status(400).json({
+        success: false,
+        message: "Book cover image is required.",
+      });
+    }
 
-    // 9. Create book document
+    // 10. Validate condition
+    const normalizedCondition =
+      condition === undefined || condition === null || condition === ""
+        ? "Good"
+        : CONDITIONS.includes(condition)
+          ? condition
+          : null;
+
+    if (!normalizedCondition) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book condition.",
+      });
+    }
+
+    // 11. Create book document
     const book = {
       title: normalizedTitle,
       author: normalizedAuthor,
@@ -633,12 +609,12 @@ app.post("/api/books", async (req, res) => {
       publishedYear: year,
       language: normalizedLanguage,
       condition: normalizedCondition,
-      ownerName: normalizedOwnerName,
+      ownerName: ownerName.trim(),
       ownerEmail: normalizedEmail,
       createdAt: new Date(),
     };
 
-    // 10. Insert into MongoDB
+    // 12. Insert into MongoDB
     const result = await booksCollection.insertOne(book);
 
     return res.status(201).json({
@@ -660,28 +636,14 @@ app.post("/api/books", async (req, res) => {
 });
 
 // MY BOOKS  ->  GET /api/my-books?email=a@b.com
-app.get("/api/my-books", async (req, res) => {
+app.get("/api/my-books", verifyApi, async (req, res) => {
   try {
-    // 1. Validate and normalize email
-    const email =
-      typeof req.query.email === "string"
-        ? req.query.email.trim().toLowerCase()
-        : "";
+    const email = req.user.email;
 
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Owner email is required.",
-      });
-    }
-
-    // 2. Validate email format
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a valid email address.",
+        message: "Authenticated Owner email is required.",
       });
     }
 
@@ -711,7 +673,7 @@ app.get("/api/my-books", async (req, res) => {
 });
 
 // UPDATE BOOK (owner only)  ->  PUT /api/books/:id?email=a@b.com
-app.put("/api/books/:id", async (req, res) => {
+app.put("/api/books/:id", verifyApi, async (req, res) => {
   try {
     // 1. Validate book ID
     const { id } = req.params;
@@ -723,18 +685,13 @@ app.put("/api/books/:id", async (req, res) => {
       });
     }
 
-    // 2. Validate owner email
-    const email =
-      typeof req.query.email === "string"
-        ? req.query.email.trim().toLowerCase()
-        : "";
+    // 2. Get authenticated owner identity
+    const email = req.user.email?.trim().toLowerCase();
 
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
+    if (!email) {
+      return res.status(401).json({
         success: false,
-        message: "A valid owner email is required.",
+        message: "Authenticated user email is unavailable.",
       });
     }
 
@@ -772,6 +729,13 @@ app.put("/api/books/:id", async (req, res) => {
     const normalizedAuthor = author.trim();
     const normalizedCategory = category.trim();
 
+    if (normalizedTitle.length > 200 || normalizedAuthor.length > 150) {
+      return res.status(400).json({
+        success: false,
+        message: "Title or author exceeds the allowed length.",
+      });
+    }
+
     // 6. Validate category
     if (!CATEGORIES.includes(normalizedCategory)) {
       return res.status(400).json({
@@ -783,7 +747,14 @@ app.put("/api/books/:id", async (req, res) => {
     // 7. Validate total copies
     const copies = Number(totalCopies);
 
-    if (!Number.isInteger(copies) || copies < 1 || copies > 100) {
+    if (
+      totalCopies === undefined ||
+      totalCopies === null ||
+      totalCopies === "" ||
+      !Number.isInteger(copies) ||
+      copies < 1 ||
+      copies > 100
+    ) {
       return res.status(400).json({
         success: false,
         message: "Total copies must be between 1 and 100.",
@@ -838,14 +809,17 @@ app.put("/api/books/:id", async (req, res) => {
     }
 
     // 10. Validate condition
-    if (condition !== undefined && !CONDITIONS.includes(condition)) {
+    if (
+      condition !== undefined &&
+      condition !== null &&
+      condition !== "" &&
+      !CONDITIONS.includes(condition)
+    ) {
       return res.status(400).json({
         success: false,
         message: "Invalid book condition.",
       });
     }
-
-    const normalizedCondition = condition ?? "Good";
 
     // 11. Find existing book
     const _id = new ObjectId(id);
@@ -869,7 +843,16 @@ app.put("/api/books/:id", async (req, res) => {
       });
     }
 
-    // 12. Calculate borrowed copies
+    // 12. Preserve existing values when omitted
+    const finalImage =
+      image === undefined ? (book.image ?? "") : normalizedImage;
+
+    const finalCondition =
+      condition === undefined || condition === null || condition === ""
+        ? (book.condition ?? "Good")
+        : condition;
+
+    // 13. Calculate borrowed copies
     const total = book.totalCopies ?? 1;
     const available = book.availableCopies ?? total;
     const borrowedNow = Math.max(0, total - available);
@@ -881,23 +864,23 @@ app.put("/api/books/:id", async (req, res) => {
       });
     }
 
-    // 13. Prepare update
+    // 14. Prepare update
     const changes = {
       title: normalizedTitle,
       author: normalizedAuthor,
       category: normalizedCategory,
-      image: normalizedImage,
+      image: finalImage,
       description: normalizedDescription,
       totalCopies: copies,
       availableCopies: copies - borrowedNow,
       isbn: normalizedIsbn,
       publishedYear: year,
       language: normalizedLanguage,
-      condition: normalizedCondition,
+      condition: finalCondition,
       updatedAt: new Date(),
     };
 
-    // 14. Atomic ownership and availability check
+    // 15. Atomic ownership and availability check
     const result = await booksCollection.updateOne(
       {
         _id,
@@ -921,7 +904,7 @@ app.put("/api/books/:id", async (req, res) => {
       });
     }
 
-    // 15. Return updated book
+    // 16. Return updated book
     return res.status(200).json({
       success: true,
       message: "Book updated successfully.",
@@ -942,9 +925,10 @@ app.put("/api/books/:id", async (req, res) => {
 });
 
 // DELETE BOOK (owner only)  ->  DELETE /api/books/:id?email=a@b.com
-app.delete("/api/books/:id", async (req, res) => {
+app.delete("/api/books/:id", verifyApi, async (req, res) => {
+  const session = client.startSession();
+
   try {
-    // 1. Validate MongoDB ObjectId
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
@@ -954,124 +938,113 @@ app.delete("/api/books/:id", async (req, res) => {
       });
     }
 
-    // 2. Validate owner email
-    const email =
-      typeof req.query.email === "string"
-        ? req.query.email.trim().toLowerCase()
-        : "";
-
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid owner email is required.",
-      });
-    }
-
     const _id = new ObjectId(id);
+    const email = req.user.email;
 
-    // 3. Find the book and verify ownership
-    const book = await booksCollection.findOne({
-      _id,
-      ownerEmail: email,
-    });
+    let outcome;
 
-    if (!book) {
-      // Check whether the book exists but belongs to someone else
-      const exists = await booksCollection.findOne(
-        { _id },
-        { projection: { _id: 1 } },
+    await session.withTransaction(async () => {
+      outcome = undefined;
+
+      const book = await booksCollection.findOne(
+        { _id, ownerEmail: email },
+        { session },
       );
 
-      return res.status(exists ? 403 : 404).json({
-        success: false,
-        message: exists
-          ? "You can only delete your own books."
-          : "Book not found.",
-      });
-    }
+      if (!book) {
+        const exists = await booksCollection.findOne(
+          { _id },
+          { projection: { _id: 1 }, session },
+        );
 
-    // 4. Check active borrowings
-    const activeBorrows = await borrowsCollection.findOne(
-      {
-        bookId: _id,
-        status: "borrowed",
-      },
-      {
-        projection: { _id: 1 },
-      },
-    );
+        outcome = {
+          status: exists ? 403 : 404,
+          message: exists
+            ? "You can only delete your own books."
+            : "Book not found.",
+        };
+        return;
+      }
 
-    if (activeBorrows) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Some copies are currently borrowed. Return them before deleting this book.",
-      });
-    }
+      const activeBorrow = await borrowsCollection.findOne(
+        {
+          bookId: _id,
+          status: "borrowed",
+        },
+        {
+          projection: { _id: 1 },
+          session,
+        },
+      );
 
-    // 5. Delete the book with ownership protection
-    const result = await booksCollection.deleteOne({
-      _id,
-      ownerEmail: email,
+      if (activeBorrow) {
+        outcome = {
+          status: 409,
+          message:
+            "Some copies are currently borrowed. Return them before deleting this book.",
+        };
+
+        return;
+      }
+
+      const result = await booksCollection.deleteOne(
+        { _id, ownerEmail: email },
+        { session },
+      );
+
+      if (result.deletedCount !== 1) {
+        throw new Error("Book deletion failed.");
+      }
+
+      outcome = {
+        status: 200,
+        message: "Book deleted successfully.",
+        data: { _id: id },
+      };
     });
 
-    if (result.deletedCount === 0) {
-      return res.status(409).json({
-        success: false,
-        message: "The book could not be deleted. Please try again.",
-      });
-    }
-
-    // 6. Success response
-    return res.status(200).json({
-      success: true,
-      message: "Book deleted successfully.",
-      data: {
-        _id: id,
-      },
+    return res.status(outcome.status).json({
+      success: outcome.status === 200,
+      message: outcome.message,
+      ...(outcome.data ? { data: outcome.data } : {}),
     });
   } catch (error) {
     console.error("Delete book error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Failed to delete book.",
+      message: "Failed to delete the book.",
     });
+  } finally {
+    await session.endSession();
   }
 });
 
 // ===== Borrowing =====
+
 // BORROW A BOOK  ->  POST /api/borrows   { bookId, userEmail, userName }
-app.post("/api/borrows", async (req, res) => {
+app.post("/api/borrows", verifyApi, async (req, res) => {
   const session = client.startSession();
 
   try {
     // 1. Validate request body
-    const { bookId, userEmail, userName } = req.body ?? {};
+    const { bookId } = req.body ?? {};
 
-    if (
-      typeof bookId !== "string" ||
-      !ObjectId.isValid(bookId) ||
-      typeof userEmail !== "string"
-    ) {
+    if (typeof bookId !== "string" || !ObjectId.isValid(bookId)) {
       return res.status(400).json({
         success: false,
-        message: "Valid bookId and userEmail are required.",
+        message: "A valid bookId is required.",
       });
     }
 
-    // 2. Normalize and validate email
-    const email = userEmail.trim().toLowerCase();
-    const name = typeof userName === "string" ? userName.trim() : "";
+    // 2. Get authenticated user identity
+    const email = req.user.email;
+    const name = req.user.name || "";
 
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
+    if (!email) {
+      return res.status(401).json({
         success: false,
-        message: "Please provide a valid email address.",
+        message: "Authenticated user email is unavailable.",
       });
     }
 
@@ -1088,6 +1061,9 @@ app.post("/api/borrows", async (req, res) => {
 
     // 3. Execute borrowing transaction
     await session.withTransaction(async () => {
+      // Reset outcome because withTransaction may retry its callback
+      outcome = undefined;
+
       // Find book
       const book = await booksCollection.findOne({ _id }, { session });
 
@@ -1205,22 +1181,10 @@ app.post("/api/borrows", async (req, res) => {
 });
 
 // MY BORROWS  ->  GET /api/borrows?email=a@b.com
-app.get("/api/borrows", async (req, res) => {
+app.get("/api/borrows", verifyApi, async (req, res) => {
   try {
     // 1. Validate email
-    const email =
-      typeof req.query.email === "string"
-        ? req.query.email.trim().toLowerCase()
-        : "";
-
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid email address is required.",
-      });
-    }
+    const email = req.user.email;
 
     // 2. Fetch user's borrowing records
     const borrows = await borrowsCollection
@@ -1248,7 +1212,7 @@ app.get("/api/borrows", async (req, res) => {
 });
 
 // RETURN A BOOK  ->  PATCH /api/borrows/:id/return   { userEmail }
-app.patch("/api/borrows/:id/return", async (req, res) => {
+app.patch("/api/borrows/:id/return", verifyApi, async (req, res) => {
   const session = client.startSession();
 
   try {
@@ -1263,21 +1227,8 @@ app.patch("/api/borrows/:id/return", async (req, res) => {
     }
 
     // 2. Validate user email
-    const email =
-      typeof req.body?.userEmail === "string"
-        ? req.body.userEmail.trim().toLowerCase()
-        : "";
-
-    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!EMAIL_REGEX.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid user email is required.",
-      });
-    }
-
     const _id = new ObjectId(id);
+    const email = req.user.email;
 
     let outcome;
 
@@ -1445,74 +1396,10 @@ app.listen(PORT, () => {
 });
 
 // IMPORTANT: Export Express app for Vercel
-export default app;
-
-/* Find duplicate emails
-Run this aggregation in MongoDB Atlas → booknook → subscribers → Aggregations:
-
-[
-  {
-    $group: {
-      _id: "$email",
-      count: { $sum: 1 },
-      ids: { $push: "$_id" }
-    }
-  },
-  {
-    $match: {
-      count: { $gt: 1 }
-    }
-  }
-]
-
-Stage 1 — $group
-Select $group and paste:
-{
-  "_id": "$email",
-  "count": { "$sum": 1 },
-  "ids": { "$push": "$_id" }
-}
-
-Stage 2 — $match
-Click Add Stage, select $match, and paste:
-{
-  "count": { "$gt": 1 }
-}
-
-
-Remove duplicate documents
-If you want to keep the oldest subscription and delete the extra documents, you can run:
-
-db.subscribers.aggregate([
-  {
-    $sort: { createdAt: 1 }
-  },
-  {
-    $group: {
-      _id: "$email",
-      ids: { $push: "$_id" }
-    }
-  },
-  {
-    $project: {
-      duplicateIds: {
-        $slice: ["$ids", 1, { $size: "$ids" }]
-      }
-    }
-  },
-  {
-    $unwind: "$duplicateIds"
-  },
-  {
-    $group: {
-      _id: null,
-      idsToDelete: { $push: "$duplicateIds" }
-    }
-  }
-]).forEach((doc) => {
-  db.subscribers.deleteMany({
-    _id: { $in: doc.idsToDelete }
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`BookNook API is running on port ${PORT}`);
   });
-});
+}
 
-*/
+export default app;
