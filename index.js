@@ -209,8 +209,13 @@ const JWKS = createRemoteJWKSet(new URL("/api/auth/jwks", BETTER_AUTH_URL));
 
 // JWT Verification Middleware
 const verifyApi = async (req, res, next) => {
+  // console.log("Authorization header exists:", !!req.headers.authorization);
   const authHeader = req.headers.authorization;
 
+  // console.log(
+  //   "Bearer token exists:",
+  //   req.headers.authorization?.startsWith("Bearer "),
+  // );
   if (!authHeader?.startsWith("Bearer ")) {
     return res.status(401).json({
       success: false,
@@ -220,6 +225,9 @@ const verifyApi = async (req, res, next) => {
 
   // const token = authHeaders.split(" ")[1];
   const token = authHeader.slice(7).trim();
+
+  // const header = decodeProtectedHeader(token);
+  // console.log("JWT header:", header);
 
   if (!token) {
     return res.status(401).json({
@@ -232,6 +240,12 @@ const verifyApi = async (req, res, next) => {
     // verifies the JWT and extracts its payload.
     const { payload } = await jwtVerify(token, JWKS);
     // console.log(payload);
+
+    /* const { payload } = await jwtVerify(token, JWKS, {
+      issuer: process.env.BETTER_AUTH_URL,
+      audience: process.env.BETTER_AUTH_URL,
+      algorithms: ["EdDSA"],
+    }); */
 
     // makes the verified identity available to subsequent handlers.
     // req.user = payload;
@@ -635,7 +649,7 @@ app.post("/api/books", verifyApi, async (req, res) => {
   }
 });
 
-// MY BOOKS  ->  GET /api/my-books?email=a@b.com
+// MY BOOKS  ->  GET /api/my-books
 app.get("/api/my-books", verifyApi, async (req, res) => {
   try {
     const email = req.user.email;
@@ -672,7 +686,7 @@ app.get("/api/my-books", verifyApi, async (req, res) => {
   }
 });
 
-// UPDATE BOOK (owner only)  ->  PUT /api/books/:id?email=a@b.com
+// UPDATE BOOK (owner only)  ->  PUT /api/books/:id
 app.put("/api/books/:id", verifyApi, async (req, res) => {
   try {
     // 1. Validate book ID
@@ -924,7 +938,7 @@ app.put("/api/books/:id", verifyApi, async (req, res) => {
   }
 });
 
-// DELETE BOOK (owner only)  ->  DELETE /api/books/:id?email=a@b.com
+// DELETE BOOK (owner only)  ->  DELETE /api/books/:id
 app.delete("/api/books/:id", verifyApi, async (req, res) => {
   const session = client.startSession();
 
@@ -1022,7 +1036,7 @@ app.delete("/api/books/:id", verifyApi, async (req, res) => {
 
 // ===== Borrowing =====
 
-// BORROW A BOOK  ->  POST /api/borrows   { bookId, userEmail, userName }
+// BORROW A BOOK  ->  POST /api/borrows  { bookId }
 app.post("/api/borrows", verifyApi, async (req, res) => {
   const session = client.startSession();
 
@@ -1180,7 +1194,7 @@ app.post("/api/borrows", verifyApi, async (req, res) => {
   }
 });
 
-// MY BORROWS  ->  GET /api/borrows?email=a@b.com
+// MY BORROWS  ->  GET /api/borrows
 app.get("/api/borrows", verifyApi, async (req, res) => {
   try {
     // 1. Validate email
@@ -1211,7 +1225,7 @@ app.get("/api/borrows", verifyApi, async (req, res) => {
   }
 });
 
-// RETURN A BOOK  ->  PATCH /api/borrows/:id/return   { userEmail }
+// RETURN A BOOK  ->  PATCH /api/borrows/:id/return
 app.patch("/api/borrows/:id/return", verifyApi, async (req, res) => {
   const session = client.startSession();
 
@@ -1396,10 +1410,10 @@ app.listen(PORT, () => {
 });
 
 // IMPORTANT: Export Express app for Vercel
-if (!process.env.VERCEL) {
+/* if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`BookNook API is running on port ${PORT}`);
   });
-}
+} */
 
 export default app;
