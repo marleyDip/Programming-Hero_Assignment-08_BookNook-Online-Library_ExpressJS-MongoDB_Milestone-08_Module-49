@@ -557,3 +557,27 @@ Potential features for future development:
 ## 📄 License
 
 This project is developed for educational and learning purposes. You may adapt and extend it according to your requirements.
+
+---
+
+## 🙏 Acknowledgements & Learning Credits
+
+### Special Thanks to Programming Hero
+
+This project was developed as part of my learning journey through the **AI-Driven Full Stack Web Engineering Course Level-1 B14**.
+
+I would like to express my sincere gratitude to the entire **Programming Hero team, instructors, mentors, and community** for providing structured learning resources, practical guidance, and an encouraging environment to grow as a developer.
+
+Throughout this journey, I have had the opportunity to strengthen my understanding of modern web development concepts, explore full-stack application architecture, and apply my knowledge by building real-world projects.
+
+**BookNook represents more than just a course assignment — it is an opportunity to transform the concepts I have learned into a practical, functional application.**
+
+Special thanks for inspiring me to keep learning, experimenting, solving problems, and building better software.
+
+**Learning never stops. Every project is another step forward.** 🚀
+
+<p align="center">
+  <a href="https://codelab.programming-hero.com/u/marleydip">
+    <img src="https://img.shields.io/badge/Programming%20Hero-Learning%20Partner-FF4B4B?style=for-the-badge" alt="Programming Hero" />
+  </a>
+</p>
