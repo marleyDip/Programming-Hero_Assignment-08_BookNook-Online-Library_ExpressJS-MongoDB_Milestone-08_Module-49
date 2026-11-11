@@ -37,7 +37,7 @@
   "type": "module",
   "main": "dist/local.js",
   "engines": {
-    "node": ">=22.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "tsx watch src/local.ts",
@@ -61,5 +61,8 @@
     "@types/node": "^24.19.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
