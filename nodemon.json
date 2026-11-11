@@ -1,8 +1,12 @@
 {
-  "watch": ["src"],
+  "watch": [
+    "src"
+  ],
   "ext": "ts,json",
-  "ignore": ["src/**/*.test.ts"],
-  "exec": "tsx src/server.ts",
+  "ignore": [
+    "src/**/*.test.ts"
+  ],
+  "exec": "tsx src/local.ts",
   "legacyWatch": true,
   "delay": 300
 }

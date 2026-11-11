@@ -15,7 +15,7 @@ api/
   index.ts                  Vercel serverless entry
 src/
   app.ts                    Express app (middleware + routes + error handling)
-  server.ts                 Local / non-serverless entry (app.listen)
+  local.ts                 Local / non-serverless entry (app.listen)
   config/                   env, MongoDB client + collections, CORS
   constants/                categories, conditions, sort options, limits
   types/                    document types, Express Request augmentation

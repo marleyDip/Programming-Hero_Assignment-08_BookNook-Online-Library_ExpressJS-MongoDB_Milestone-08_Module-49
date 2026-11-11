@@ -40,11 +40,11 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch src/local.ts",
     "_devNodemon": "nodemon src/index.ts",
     "_devNodemonConfigure": "nodemon",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node dist/local.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:indexes": "tsx src/scripts/createIndexes.ts",
     "db:indexes:prod": "node dist/scripts/createIndexes.js"
