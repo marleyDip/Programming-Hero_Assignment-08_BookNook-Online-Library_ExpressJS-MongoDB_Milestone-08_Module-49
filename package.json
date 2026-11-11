@@ -1,7 +1,7 @@
 {
   "name": "booknook-server",
   "version": "1.0.0",
-  "dssescription": "BookNook small online library REST API (Express + MongoDB + TypeScript)",
+  "description": "BookNook small online library REST API (Express + MongoDB + TypeScript)",
   "keywords": [
     "booknook",
     "online library",
@@ -35,14 +35,12 @@
   },
   "private": true,
   "type": "module",
-  "main": "dist/server.js",
+  "main": "dist/local.js",
   "engines": {
     "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "tsx watch src/local.ts",
-    "_devNodemon": "nodemon src/index.ts",
-    "_devNodemonConfigure": "nodemon",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/local.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -51,16 +49,17 @@
   },
   "dependencies": {
     "cors": "^2.8.6",
-    "dotenv": "^18.0.9",
+    "dotenv": "^18.0.10",
     "express": "^5.3.0",
-    "jose": "^6.2.15",
+    "jose": "^6.2.17",
     "mongodb": "^7.8.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.19.2",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   }
 }
